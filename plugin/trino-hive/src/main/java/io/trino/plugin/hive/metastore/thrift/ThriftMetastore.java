@@ -65,6 +65,8 @@ public sealed interface ThriftMetastore
 
     List<String> getAllDatabases();
 
+//    List<String> getAllDatabases(String catName);
+
     List<String> getAllTables(String databaseName);
 
     Optional<List<SchemaTableName>> getAllTables();

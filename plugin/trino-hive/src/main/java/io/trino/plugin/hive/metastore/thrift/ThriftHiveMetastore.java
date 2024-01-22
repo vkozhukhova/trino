@@ -232,6 +232,26 @@ public final class ThriftHiveMetastore
         }
     }
 
+//    @Override
+//    public List<String> getAllDatabases(String catName)
+//    {
+//        try {
+//            return retry()
+//                    .stopOnIllegalExceptions()
+//                    .run("getAllDatabases", () -> {
+//                        try (ThriftMetastoreClient client = createMetastoreClient()) {
+//                            return client.getAllDatabases(catName);
+//                        }
+//                    });
+//        }
+//        catch (TException e) {
+//            throw new TrinoException(HIVE_METASTORE_ERROR, e);
+//        }
+//        catch (Exception e) {
+//            throw propagate(e);
+//        }
+//    }
+
     @Override
     public Optional<Database> getDatabase(String databaseName)
     {

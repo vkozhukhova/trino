@@ -43,6 +43,8 @@ public class DefaultThriftMetastoreClientFactory
     private final HiveMetastoreAuthentication metastoreAuthentication;
     private final String hostname;
 
+    private final String catName;
+
     private final MetastoreSupportsDateStatistics metastoreSupportsDateStatistics = new MetastoreSupportsDateStatistics();
     private final AtomicInteger chosenGetTableAlternative = new AtomicInteger(Integer.MAX_VALUE);
     private final AtomicInteger chosenTableParamAlternative = new AtomicInteger(Integer.MAX_VALUE);
@@ -58,7 +60,8 @@ public class DefaultThriftMetastoreClientFactory
             Duration connectTimeout,
             Duration readTimeout,
             HiveMetastoreAuthentication metastoreAuthentication,
-            String hostname)
+            String hostname,
+            String catName)
     {
         this.sslContext = requireNonNull(sslContext, "sslContext is null");
         this.socksProxy = requireNonNull(socksProxy, "socksProxy is null");
@@ -66,6 +69,7 @@ public class DefaultThriftMetastoreClientFactory
         this.readTimeoutMillis = toIntExact(readTimeout.toMillis());
         this.metastoreAuthentication = requireNonNull(metastoreAuthentication, "metastoreAuthentication is null");
         this.hostname = requireNonNull(hostname, "hostname is null");
+        this.catName = requireNonNull(catName, "hostname is null");
     }
 
     @Inject
@@ -85,22 +89,24 @@ public class DefaultThriftMetastoreClientFactory
                 config.getConnectTimeout(),
                 config.getReadTimeout(),
                 metastoreAuthentication,
-                nodeManager.getCurrentNode().getHost());
+                nodeManager.getCurrentNode().getHost(),
+                config.getCatName());
     }
 
     @Override
     public ThriftMetastoreClient create(HostAndPort address, Optional<String> delegationToken)
             throws TTransportException
     {
-        return create(() -> createTransport(address, delegationToken), hostname);
+        return create(() -> createTransport(address, delegationToken), hostname, catName);
     }
 
-    protected ThriftMetastoreClient create(TransportSupplier transportSupplier, String hostname)
+    protected ThriftMetastoreClient create(TransportSupplier transportSupplier, String hostname, String catName)
             throws TTransportException
     {
         return new ThriftHiveMetastoreClient(
                 transportSupplier,
                 hostname,
+                catName,
                 metastoreSupportsDateStatistics,
                 chosenGetTableAlternative,
                 chosenTableParamAlternative,
