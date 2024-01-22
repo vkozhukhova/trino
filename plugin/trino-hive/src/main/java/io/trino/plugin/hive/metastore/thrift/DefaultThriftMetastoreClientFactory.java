@@ -69,7 +69,7 @@ public class DefaultThriftMetastoreClientFactory
         this.readTimeoutMillis = toIntExact(readTimeout.toMillis());
         this.metastoreAuthentication = requireNonNull(metastoreAuthentication, "metastoreAuthentication is null");
         this.hostname = requireNonNull(hostname, "hostname is null");
-        this.catName = requireNonNull(catName, "hostname is null");
+        this.catName = catName;
     }
 
     @Inject
