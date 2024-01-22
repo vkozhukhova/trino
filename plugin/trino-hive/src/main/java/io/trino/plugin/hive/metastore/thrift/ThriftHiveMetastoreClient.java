@@ -164,7 +164,7 @@ public class ThriftHiveMetastoreClient
     {
         this.transportSupplier = requireNonNull(transportSupplier, "transportSupplier is null");
         this.hostname = requireNonNull(hostname, "hostname is null");
-        this.catName = requireNonNull(catName, "hostname is null");
+        this.catName = catName;
         this.metastoreSupportsDateStatistics = requireNonNull(metastoreSupportsDateStatistics, "metastoreSupportsDateStatistics is null");
         this.chosenGetTableAlternative = requireNonNull(chosenGetTableAlternative, "chosenGetTableAlternative is null");
         this.chosenTableParamAlternative = requireNonNull(chosenTableParamAlternative, "chosenTableParamAlternative is null");
