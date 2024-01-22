@@ -36,7 +36,8 @@ public final class TestHiveMetastoreClientFactory
             new Duration(10, SECONDS),
             new Duration(10, SECONDS),
             new NoHiveMetastoreAuthentication(),
-            "localhost");
+            "localhost",
+            "catalog");
 
     @Inject
     @Named("databases.hive.metastore.host")

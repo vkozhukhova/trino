@@ -44,6 +44,7 @@ public class TestThriftHiveMetastoreClient
                     return new TTransportMock();
                 },
                 "dummy",
+                "catalog",
                 new MetastoreSupportsDateStatistics(),
                 new AtomicInteger(),
                 new AtomicInteger(),

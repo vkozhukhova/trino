@@ -99,6 +99,7 @@ import static io.trino.plugin.hive.metastore.thrift.TxnUtils.createValidReadTxnL
 import static io.trino.plugin.hive.metastore.thrift.TxnUtils.createValidTxnWriteIdList;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static java.util.Objects.requireNonNullElse;
 import static org.apache.thrift.TApplicationException.UNKNOWN_METHOD;
 
 public class ThriftHiveMetastoreClient
@@ -113,6 +114,30 @@ public class ThriftHiveMetastoreClient
     private TTransport transport;
     protected ThriftHiveMetastore.Iface client;
     private final String hostname;
+    private final String catName;
+
+    /**
+     * This character is used to mark a database name as having a catalog name prepended.  This
+     * marker should be placed first in the String to make it easy to determine that this has both
+     * a catalog and a database name.  @ is chosen as it is not used in regular expressions.  This
+     * is only intended for use when making old Thrift calls that do not support catalog names.
+     */
+    public static final char CATALOG_DB_THRIFT_NAME_MARKER = '@';
+
+    /**
+     * This String is used to seaprate the catalog name from the database name.  This should only
+     * be used in Strings that are prepended with {@link #CATALOG_DB_THRIFT_NAME_MARKER}.  # is
+     * chosen because it is not used in regular expressions.  this is only intended for use when
+     * making old Thrift calls that do not support catalog names.
+     */
+    public static final String CATALOG_DB_SEPARATOR = "#";
+
+    /**
+     * Mark a database as being empty (as distinct from null).
+     */
+    public static final String DB_EMPTY_MARKER = "!";
+
+    public static final String HIVE_DEFAULT_CATALOG = "hive";
 
     private final MetastoreSupportsDateStatistics metastoreSupportsDateStatistics;
     private final AtomicInteger chosenGetTableAlternative;
@@ -126,6 +151,7 @@ public class ThriftHiveMetastoreClient
     public ThriftHiveMetastoreClient(
             TransportSupplier transportSupplier,
             String hostname,
+            String catName,
             MetastoreSupportsDateStatistics metastoreSupportsDateStatistics,
             AtomicInteger chosenGetTableAlternative,
             AtomicInteger chosenTableParamAlternative,
@@ -138,6 +164,7 @@ public class ThriftHiveMetastoreClient
     {
         this.transportSupplier = requireNonNull(transportSupplier, "transportSupplier is null");
         this.hostname = requireNonNull(hostname, "hostname is null");
+        this.catName = catName;
         this.metastoreSupportsDateStatistics = requireNonNull(metastoreSupportsDateStatistics, "metastoreSupportsDateStatistics is null");
         this.chosenGetTableAlternative = requireNonNull(chosenGetTableAlternative, "chosenGetTableAlternative is null");
         this.chosenTableParamAlternative = requireNonNull(chosenTableParamAlternative, "chosenTableParamAlternative is null");
@@ -161,6 +188,26 @@ public class ThriftHiveMetastoreClient
         this.client = client;
     }
 
+    private String prependCatalogToDbName(String catalogName, String dbName)
+    {
+        if (catalogName == null) {
+            catalogName = HIVE_DEFAULT_CATALOG;
+        }
+        StringBuilder buf = new StringBuilder()
+                .append(CATALOG_DB_THRIFT_NAME_MARKER)
+                .append(catalogName)
+                .append(CATALOG_DB_SEPARATOR);
+        if (dbName != null) {
+            if (dbName.isEmpty()) {
+                buf.append(DB_EMPTY_MARKER);
+            }
+            else {
+                buf.append(dbName);
+            }
+        }
+        return buf.toString();
+    }
+
     @Override
     public void close()
     {
@@ -176,21 +223,21 @@ public class ThriftHiveMetastoreClient
     public List<String> getAllDatabases()
             throws TException
     {
-        return client.getAllDatabases();
+        return client.getDatabases(prependCatalogToDbName(catName, null));
     }
 
     @Override
     public Database getDatabase(String dbName)
             throws TException
     {
-        return client.getDatabase(dbName);
+        return client.getDatabase(prependCatalogToDbName(catName, dbName));
     }
 
     @Override
     public List<String> getAllTables(String databaseName)
             throws TException
     {
-        return client.getAllTables(databaseName);
+        return client.getAllTables(prependCatalogToDbName(catName, databaseName));
     }
 
     @Override
@@ -201,7 +248,7 @@ public class ThriftHiveMetastoreClient
                 exception -> !isUnknownMethodExceptionalResponse(exception),
                 chosenGetAllTablesAlternative,
                 // Empty table types argument (the 3rd one) means all types of tables
-                () -> getSchemaTableNames(client.getTableMeta("*", "*", ImmutableList.of())),
+                () -> getSchemaTableNames(client.getTableMeta(prependCatalogToDbName(catName, "*"), "*", ImmutableList.of())),
                 Optional::empty);
     }
 
@@ -212,7 +259,7 @@ public class ThriftHiveMetastoreClient
         return alternativeCall(
                 exception -> !isUnknownMethodExceptionalResponse(exception),
                 chosenGetAllViewsPerDatabaseAlternative,
-                () -> client.getTablesByType(databaseName, ".*", VIRTUAL_VIEW.name()),
+                () -> client.getTablesByType(prependCatalogToDbName(catName, databaseName), ".*", VIRTUAL_VIEW.name()),
                 // fallback to enumerating Presto views only (Hive views can still be executed, but will be listed as tables and not views)
                 () -> getTablesWithParameter(databaseName, PRESTO_VIEW_FLAG, "true"));
     }
@@ -224,7 +271,7 @@ public class ThriftHiveMetastoreClient
         return alternativeCall(
                 exception -> !isUnknownMethodExceptionalResponse(exception),
                 chosenGetAllViewsAlternative,
-                () -> getSchemaTableNames(client.getTableMeta("*", "*", ImmutableList.of(VIRTUAL_VIEW.name()))),
+                () -> getSchemaTableNames(client.getTableMeta(prependCatalogToDbName(catName, "*"), "*", ImmutableList.of(VIRTUAL_VIEW.name()))),
                 Optional::empty);
     }
 
@@ -259,14 +306,15 @@ public class ThriftHiveMetastoreClient
         return alternativeCall(
                 ThriftHiveMetastoreClient::defaultIsValidExceptionalResponse,
                 chosenTableParamAlternative,
-                () -> client.getTableNamesByFilter(databaseName, filterWithEquals, (short) -1),
-                () -> client.getTableNamesByFilter(databaseName, filterWithLike, (short) -1));
+                () -> client.getTableNamesByFilter(prependCatalogToDbName(catName, databaseName), filterWithEquals, (short) -1),
+                () -> client.getTableNamesByFilter(prependCatalogToDbName(catName, databaseName), filterWithLike, (short) -1));
     }
 
     @Override
     public void createDatabase(Database database)
             throws TException
     {
+        database.setCatalogName(catName);
         client.createDatabase(database);
     }
 
@@ -274,20 +322,21 @@ public class ThriftHiveMetastoreClient
     public void dropDatabase(String databaseName, boolean deleteData, boolean cascade)
             throws TException
     {
-        client.dropDatabase(databaseName, deleteData, cascade);
+        client.dropDatabase(prependCatalogToDbName(catName, databaseName), deleteData, cascade);
     }
 
     @Override
     public void alterDatabase(String databaseName, Database database)
             throws TException
     {
-        client.alterDatabase(databaseName, database);
+        client.alterDatabase(prependCatalogToDbName(catName, databaseName), database);
     }
 
     @Override
     public void createTable(Table table)
             throws TException
     {
+        table.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
         client.createTable(table);
     }
 
@@ -295,14 +344,14 @@ public class ThriftHiveMetastoreClient
     public void dropTable(String databaseName, String name, boolean deleteData)
             throws TException
     {
-        client.dropTable(databaseName, name, deleteData);
+        client.dropTable(prependCatalogToDbName(catName, databaseName), name, deleteData);
     }
 
     @Override
     public void alterTableWithEnvironmentContext(String databaseName, String tableName, Table newTable, EnvironmentContext context)
             throws TException
     {
-        client.alterTableWithEnvironmentContext(databaseName, tableName, newTable, context);
+        client.alterTableWithEnvironmentContext(prependCatalogToDbName(catName, databaseName), tableName, newTable, context);
     }
 
     @Override
@@ -314,17 +363,18 @@ public class ThriftHiveMetastoreClient
                 chosenGetTableAlternative,
                 () -> {
                     GetTableRequest request = new GetTableRequest(databaseName, tableName);
+                    request.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
                     request.setCapabilities(new ClientCapabilities(ImmutableList.of(ClientCapability.INSERT_ONLY_TABLES)));
                     return client.getTableReq(request).getTable();
                 },
-                () -> client.getTable(databaseName, tableName));
+                () -> client.getTable(prependCatalogToDbName(catName, databaseName), tableName));
     }
 
     @Override
     public List<FieldSchema> getFields(String databaseName, String tableName)
             throws TException
     {
-        return client.getFields(databaseName, tableName);
+        return client.getFields(prependCatalogToDbName(catName, databaseName), tableName);
     }
 
     @Override
@@ -332,6 +382,7 @@ public class ThriftHiveMetastoreClient
             throws TException
     {
         TableStatsRequest tableStatsRequest = new TableStatsRequest(databaseName, tableName, columnNames);
+        tableStatsRequest.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
         return client.getTableStatisticsReq(tableStatsRequest).getTableStats();
     }
 
@@ -344,6 +395,7 @@ public class ThriftHiveMetastoreClient
                 statistics,
                 stats -> {
                     ColumnStatisticsDesc statisticsDescription = new ColumnStatisticsDesc(true, databaseName, tableName);
+                    statisticsDescription.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
                     ColumnStatistics request = new ColumnStatistics(statisticsDescription, stats);
                     client.updateTableColumnStatistics(request);
                 });
@@ -353,7 +405,7 @@ public class ThriftHiveMetastoreClient
     public void deleteTableColumnStatistics(String databaseName, String tableName, String columnName)
             throws TException
     {
-        client.deleteTableColumnStatistics(databaseName, tableName, columnName);
+        client.deleteTableColumnStatistics(prependCatalogToDbName(catName, databaseName), tableName, columnName);
     }
 
     @Override
@@ -361,6 +413,7 @@ public class ThriftHiveMetastoreClient
             throws TException
     {
         PartitionsStatsRequest partitionsStatsRequest = new PartitionsStatsRequest(databaseName, tableName, columnNames, partitionNames);
+        partitionsStatsRequest.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
         return client.getPartitionsStatisticsReq(partitionsStatsRequest).getPartStats();
     }
 
@@ -374,6 +427,7 @@ public class ThriftHiveMetastoreClient
                 stats -> {
                     ColumnStatisticsDesc statisticsDescription = new ColumnStatisticsDesc(false, databaseName, tableName);
                     statisticsDescription.setPartName(partitionName);
+                    statisticsDescription.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
                     ColumnStatistics request = new ColumnStatistics(statisticsDescription, stats);
                     client.updatePartitionColumnStatistics(request);
                 });
@@ -383,7 +437,7 @@ public class ThriftHiveMetastoreClient
     public void deletePartitionColumnStatistics(String databaseName, String tableName, String partitionName, String columnName)
             throws TException
     {
-        client.deletePartitionColumnStatistics(databaseName, tableName, partitionName, columnName);
+        client.deletePartitionColumnStatistics(prependCatalogToDbName(catName, databaseName), tableName, partitionName, columnName);
     }
 
     private void setColumnStatistics(String objectName, List<ColumnStatisticsObj> statistics, UnaryCall<List<ColumnStatisticsObj>> saveColumnStatistics)
@@ -438,20 +492,21 @@ public class ThriftHiveMetastoreClient
     public List<String> getPartitionNames(String databaseName, String tableName)
             throws TException
     {
-        return client.getPartitionNames(databaseName, tableName, (short) -1);
+        return client.getPartitionNames(prependCatalogToDbName(catName, databaseName), tableName, (short) -1);
     }
 
     @Override
     public List<String> getPartitionNamesFiltered(String databaseName, String tableName, List<String> partitionValues)
             throws TException
     {
-        return client.getPartitionNamesPs(databaseName, tableName, partitionValues, (short) -1);
+        return client.getPartitionNamesPs(prependCatalogToDbName(catName, databaseName), tableName, partitionValues, (short) -1);
     }
 
     @Override
     public int addPartitions(List<Partition> newPartitions)
             throws TException
     {
+        newPartitions.forEach(p -> p.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG)));
         return client.addPartitions(newPartitions);
     }
 
@@ -459,28 +514,28 @@ public class ThriftHiveMetastoreClient
     public boolean dropPartition(String databaseName, String tableName, List<String> partitionValues, boolean deleteData)
             throws TException
     {
-        return client.dropPartition(databaseName, tableName, partitionValues, deleteData);
+        return client.dropPartition(prependCatalogToDbName(catName, databaseName), tableName, partitionValues, deleteData);
     }
 
     @Override
     public void alterPartition(String databaseName, String tableName, Partition partition)
             throws TException
     {
-        client.alterPartition(databaseName, tableName, partition);
+        client.alterPartition(prependCatalogToDbName(catName, databaseName), tableName, partition);
     }
 
     @Override
     public Partition getPartition(String databaseName, String tableName, List<String> partitionValues)
             throws TException
     {
-        return client.getPartition(databaseName, tableName, partitionValues);
+        return client.getPartition(prependCatalogToDbName(catName, databaseName), tableName, partitionValues);
     }
 
     @Override
     public List<Partition> getPartitionsByNames(String databaseName, String tableName, List<String> partitionNames)
             throws TException
     {
-        return client.getPartitionsByNames(databaseName, tableName, partitionNames);
+        return client.getPartitionsByNames(prependCatalogToDbName(catName, databaseName), tableName, partitionNames);
     }
 
     @Override
@@ -494,6 +549,7 @@ public class ThriftHiveMetastoreClient
     public List<HiveObjectPrivilege> listPrivileges(String principalName, PrincipalType principalType, HiveObjectRef hiveObjectRef)
             throws TException
     {
+        hiveObjectRef.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
         return client.listPrivileges(principalName, principalType, hiveObjectRef);
     }
 
@@ -523,6 +579,7 @@ public class ThriftHiveMetastoreClient
     public boolean grantPrivileges(PrivilegeBag privilegeBag)
             throws TException
     {
+        privilegeBag.getPrivileges().forEach(privilege -> privilege.getHiveObject().setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG)));
         return client.grantRevokePrivileges(new GrantRevokePrivilegeRequest(GRANT, privilegeBag)).isSuccess();
     }
 
@@ -530,6 +587,7 @@ public class ThriftHiveMetastoreClient
     public boolean revokePrivileges(PrivilegeBag privilegeBag, boolean revokeGrantOption)
             throws TException
     {
+        privilegeBag.getPrivileges().forEach(privilege -> privilege.getHiveObject().setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG)));
         GrantRevokePrivilegeRequest grantRevokePrivilegeRequest = new GrantRevokePrivilegeRequest(REVOKE, privilegeBag);
         grantRevokePrivilegeRequest.setRevokeGrantOption(revokeGrantOption);
         return client.grantRevokePrivileges(grantRevokePrivilegeRequest).isSuccess();
@@ -723,12 +781,13 @@ public class ThriftHiveMetastoreClient
                 chosenAlterPartitionsAlternative,
                 () -> {
                     AlterPartitionsRequest request = new AlterPartitionsRequest(dbName, tableName, partitions);
+                    request.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
                     request.setWriteId(writeId);
                     client.alterPartitionsReq(request);
                     return null;
                 },
                 () -> {
-                    client.alterPartitionsWithEnvironmentContext(dbName, tableName, partitions, new EnvironmentContext());
+                    client.alterPartitionsWithEnvironmentContext(prependCatalogToDbName(catName, dbName), tableName, partitions, new EnvironmentContext());
                     return null;
                 });
     }
@@ -757,12 +816,13 @@ public class ThriftHiveMetastoreClient
                     request.setValidWriteIdList(getValidWriteIds(ImmutableList.of(format("%s.%s", table.getDbName(), table.getTableName())), transactionId));
                     request.setWriteId(writeId);
                     request.setEnvironmentContext(environmentContext);
+                    request.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
                     client.alterTableReq(request);
                     return null;
                 },
                 () -> {
                     table.setWriteId(originalWriteId);
-                    client.alterTableWithEnvironmentContext(table.getDbName(), table.getTableName(), table, environmentContext);
+                    client.alterTableWithEnvironmentContext(prependCatalogToDbName(catName, table.getDbName()), table.getTableName(), table, environmentContext);
                     return null;
                 });
     }
@@ -771,20 +831,21 @@ public class ThriftHiveMetastoreClient
     public Function getFunction(String databaseName, String functionName)
             throws TException
     {
-        return client.getFunction(databaseName, functionName);
+        return client.getFunction(prependCatalogToDbName(catName, databaseName), functionName);
     }
 
     @Override
     public Collection<String> getFunctions(String databaseName, String functionNamePattern)
             throws TException
     {
-        return client.getFunctions(databaseName, functionNamePattern);
+        return client.getFunctions(prependCatalogToDbName(catName, databaseName), functionNamePattern);
     }
 
     @Override
     public void createFunction(Function function)
             throws TException
     {
+        function.setCatName(requireNonNullElse(catName, HIVE_DEFAULT_CATALOG));
         client.createFunction(function);
     }
 
@@ -792,14 +853,14 @@ public class ThriftHiveMetastoreClient
     public void alterFunction(Function function)
             throws TException
     {
-        client.alterFunction(function.getDbName(), function.getFunctionName(), function);
+        client.alterFunction(prependCatalogToDbName(catName, function.getDbName()), function.getFunctionName(), function);
     }
 
     @Override
     public void dropFunction(String databaseName, String functionName)
             throws TException
     {
-        client.dropFunction(databaseName, functionName);
+        client.dropFunction(prependCatalogToDbName(catName, databaseName), functionName);
     }
 
     // Method needs to be final for @SafeVarargs to work

@@ -54,6 +54,7 @@ public class ThriftMetastoreConfig
     private boolean assumeCanonicalPartitionKeys;
     private int writeStatisticsThreads = 20;
     private boolean batchMetadataFetchEnabled = true;
+    private String catName = "hive";
 
     @NotNull
     public Duration getConnectTimeout()
@@ -358,6 +359,19 @@ public class ThriftMetastoreConfig
     public ThriftMetastoreConfig setBatchMetadataFetchEnabled(boolean batchMetadataFetchEnabled)
     {
         this.batchMetadataFetchEnabled = batchMetadataFetchEnabled;
+        return this;
+    }
+
+    public String getCatName()
+    {
+        return catName;
+    }
+
+    @Config("hive.metastore.catalog")
+    @ConfigDescription("Enables working with particular catalog in metastore")
+    public ThriftMetastoreConfig setCatName(String catName)
+    {
+        this.catName = catName;
         return this;
     }
 }
